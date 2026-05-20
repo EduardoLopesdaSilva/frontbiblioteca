@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  body {
+    @apply bg-senai-gray text-slate-900 antialiased;
+  }
+
+  a {
+    @apply text-senai-blue underline-offset-2 hover:underline;
+  }
+
+  ::selection {
+    background: rgba(0, 93, 165, 0.18);
+  }
+}
+
+@layer components {
+  .container-page {
+    @apply mx-auto w-full max-w-6xl px-4;
+  }
+}
+
