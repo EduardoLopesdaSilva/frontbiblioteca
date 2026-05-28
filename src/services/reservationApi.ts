@@ -1,8 +1,13 @@
 import { apiRequest } from './apiClient'
-import type { ApiReservation, ApiReservationStatus } from '../types/api'
+import type { ApiCalendarSlot, ApiReservation, ApiReservationStatus } from '../types/api'
 
 export async function apiListMyReservations() {
   return apiRequest<ApiReservation[]>('/reservations/me')
+}
+
+/** Ocupação global do calendário (sem dados pessoais). */
+export async function apiListCalendarOccupancy() {
+  return apiRequest<ApiCalendarSlot[]>('/reservations/calendar')
 }
 
 export async function apiListAllReservations() {
@@ -52,4 +57,9 @@ export async function apiCheckIn(id: string) {
 
 export async function apiCheckOut(id: string) {
   return apiRequest<ApiReservation>(`/reservations/${id}/checkout`, { method: 'POST' })
+}
+
+/** Cancelamento pelo próprio usuário (Pendente ou Aprovada). */
+export async function apiCancelMyReservation(id: string) {
+  return apiRequest<ApiReservation>(`/reservations/${id}/cancel`, { method: 'POST' })
 }

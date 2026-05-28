@@ -4,7 +4,7 @@
  */
 import { useMemo, useState } from 'react'
 import { FaChevronLeft, FaChevronRight } from 'react-icons/fa'
-import type { CalendarViewMode, Reservation, ReservationResourceType } from '../../types'
+import type { CalendarViewMode, Reservation, ReservationResourceType, ReservationStatus } from '../../types'
 import { buildDateTime, formatDateBR, pad2, toISODate } from '../../utils/dateFormat'
 import { blocksSchedule, timeOverlaps } from '../../utils/reservationRules'
 import BadgeStatus from '../BadgeStatus'
@@ -31,7 +31,6 @@ function startOfWeek(iso: string) {
 
 function monthDays(iso: string) {
   const [y, m] = iso.split('-').map(Number)
-  const first = new Date(y, m - 1, 1)
   const last = new Date(y, m, 0)
   const days: string[] = []
   for (let d = 1; d <= last.getDate(); d++) {
@@ -46,6 +45,56 @@ function slotsForDay() {
     out.push(`${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`)
   }
   return out
+}
+
+function slotLabel(r: Reservation, isAdmin?: boolean) {
+  if (isAdmin) return r.status
+  if (r.isMine) return r.status
+  return 'Ocupado'
+}
+
+function slotTitle(r: Reservation, isAdmin?: boolean) {
+  if (isAdmin) return `${r.status} — ${r.createdByName}`
+  if (r.isMine) return `Minha reserva — ${r.status}`
+  return `Horário ocupado — ${r.status}`
+}
+
+function occupancyClasses(r: Reservation | undefined, free: boolean, isAdmin?: boolean) {
+  if (free) {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-900 hover:border-senai-blue hover:bg-senai-blue/10 cursor-pointer'
+  }
+  if (!r) {
+    return 'border-slate-100 bg-slate-50 text-slate-400 cursor-not-allowed'
+  }
+  if (r.isMine && !isAdmin) {
+    return 'border-senai-blue bg-senai-blue/10 text-senai-blue cursor-default ring-1 ring-senai-blue/30'
+  }
+  switch (r.status as ReservationStatus) {
+    case 'Pendente':
+      return 'border-amber-300 bg-amber-50 text-amber-900 cursor-default'
+    case 'Em uso':
+      return 'border-sky-300 bg-sky-50 text-sky-900 cursor-default'
+    case 'Confirmada':
+      return 'border-slate-300 bg-slate-100 text-slate-700 cursor-default'
+    default:
+      return 'border-senai-red/40 bg-senai-red/10 text-senai-red cursor-default'
+  }
+}
+
+function weekCellClasses(r: Reservation | undefined, free: boolean, isAdmin?: boolean) {
+  if (free) return 'bg-emerald-50 hover:bg-senai-blue/10 cursor-pointer'
+  if (!r) return 'bg-slate-50 cursor-not-allowed'
+  if (r.isMine && !isAdmin) return 'bg-senai-blue/15 text-senai-blue cursor-default'
+  switch (r.status as ReservationStatus) {
+    case 'Pendente':
+      return 'bg-amber-100 text-amber-900 cursor-default'
+    case 'Em uso':
+      return 'bg-sky-100 text-sky-900 cursor-default'
+    case 'Confirmada':
+      return 'bg-slate-200 text-slate-700 cursor-default'
+    default:
+      return 'bg-senai-red/15 text-senai-red cursor-default'
+  }
 }
 
 export default function CalendarView({
@@ -107,6 +156,12 @@ export default function CalendarView({
     [],
   )
 
+  const dayList = useMemo(() => {
+    const all = reservationsOn(selectedDate)
+    if (isAdmin) return all
+    return all.filter((r) => r.isMine)
+  }, [selectedDate, relevant, isAdmin])
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -146,7 +201,8 @@ export default function CalendarView({
       </div>
 
       <p className="text-xs text-slate-600">
-        {resourceLabel} • {isAdmin ? 'Modo administrador' : 'Clique em horário livre para reservar'}
+        {resourceLabel} •{' '}
+        {isAdmin ? 'Modo administrador' : 'Horários ocupados por outros usuários aparecem sem identificação'}
       </p>
 
       {view === 'day' ? (
@@ -160,19 +216,20 @@ export default function CalendarView({
               <button
                 key={t}
                 type="button"
-                disabled={!free && !booked}
+                disabled={!free}
                 onClick={() => free && onSlotClick(selectedDate, t)}
+                title={booked ? slotTitle(booked, isAdmin) : free ? 'Disponível' : 'Indisponível'}
                 className={[
                   'rounded-md border px-2 py-2 text-xs font-semibold transition',
-                  booked
-                    ? 'border-senai-red/40 bg-senai-red/10 text-senai-red cursor-default'
-                    : free
-                      ? 'border-slate-200 bg-white hover:border-senai-blue hover:bg-senai-blue/5'
-                      : 'border-slate-100 bg-slate-50 text-slate-400 cursor-not-allowed',
+                  occupancyClasses(booked, free, isAdmin),
                 ].join(' ')}
               >
                 <div>{t}</div>
-                {booked ? <div className="mt-0.5 truncate text-[10px]">{booked.status}</div> : null}
+                {booked ? (
+                  <div className="mt-0.5 truncate text-[10px]">{slotLabel(booked, isAdmin)}</div>
+                ) : free ? (
+                  <div className="mt-0.5 text-[10px] font-normal text-emerald-700">Livre</div>
+                ) : null}
               </button>
             )
           })}
@@ -205,13 +262,12 @@ export default function CalendarView({
                       <td key={d} className="p-1">
                         <button
                           type="button"
-                          disabled={!free && !booked}
+                          disabled={!free}
                           onClick={() => free && onSlotClick(d, t)}
-                          className={[
-                            'h-8 w-full rounded text-[10px]',
-                            booked ? 'bg-senai-red/15 text-senai-red' : free ? 'bg-emerald-50 hover:bg-senai-blue/10' : 'bg-slate-50',
-                          ].join(' ')}
-                          title={booked ? `${booked.status} — ${booked.createdByName}` : free ? 'Disponível' : 'Indisponível'}
+                          className={['h-8 w-full rounded text-[10px]', weekCellClasses(booked, free, isAdmin)].join(
+                            ' ',
+                          )}
+                          title={booked ? slotTitle(booked, isAdmin) : free ? 'Disponível' : 'Indisponível'}
                         />
                       </td>
                     )
@@ -244,11 +300,17 @@ export default function CalendarView({
                 <div className="font-bold text-slate-900">{d.slice(8)}</div>
                 <div className="mt-1 space-y-0.5">
                   {list.slice(0, 2).map((r) => (
-                    <div key={r.id} className="truncate rounded bg-slate-100 px-1 py-0.5">
-                      {r.startTime} {r.status}
+                    <div
+                      key={r.id}
+                      className={[
+                        'truncate rounded px-1 py-0.5',
+                        r.isMine && !isAdmin ? 'bg-senai-blue/15 text-senai-blue' : 'bg-slate-100 text-slate-700',
+                      ].join(' ')}
+                    >
+                      {r.startTime} {slotLabel(r, isAdmin)}
                     </div>
                   ))}
-                  {list.length > 2 ? <div className="text-slate-500">+{list.length - 2}</div> : null}
+                  {list.length > 2 ? <div className="text-slate-500">+{list.length - 2} ocupado(s)</div> : null}
                 </div>
               </button>
             )
@@ -258,23 +320,37 @@ export default function CalendarView({
 
       <div className="flex flex-wrap gap-3 text-xs text-slate-600">
         <span className="inline-flex items-center gap-1">
-          <span className="h-3 w-3 rounded border border-slate-200 bg-white" /> Livre
+          <span className="h-3 w-3 rounded border border-emerald-200 bg-emerald-50" /> Livre
         </span>
         <span className="inline-flex items-center gap-1">
-          <span className="h-3 w-3 rounded bg-senai-red/15" /> Reservado
+          <span className="h-3 w-3 rounded border border-slate-300 bg-slate-100" /> Confirmada
         </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="h-3 w-3 rounded border border-amber-300 bg-amber-50" /> Pendente
+        </span>
+        {!isAdmin ? (
+          <span className="inline-flex items-center gap-1">
+            <span className="h-3 w-3 rounded border border-senai-blue bg-senai-blue/15" /> Minha reserva
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1">
+            <span className="h-3 w-3 rounded bg-senai-red/15" /> Reservado
+          </span>
+        )}
       </div>
 
-      {view === 'day' && reservationsOn(selectedDate).length > 0 ? (
+      {view === 'day' && dayList.length > 0 ? (
         <div className="space-y-2">
-          <h4 className="text-sm font-bold text-slate-900">Reservas do dia</h4>
-          {reservationsOn(selectedDate).map((r) => (
+          <h4 className="text-sm font-bold text-slate-900">
+            {isAdmin ? 'Reservas do dia' : 'Minhas reservas do dia'}
+          </h4>
+          {dayList.map((r) => (
             <div key={r.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs">
               <span className="font-semibold">
                 {r.startTime} · {r.durationHours}h
               </span>
               <BadgeStatus status={r.status} />
-              <span className="text-slate-600">{r.createdByName}</span>
+              {isAdmin ? <span className="text-slate-600">{r.createdByName}</span> : null}
             </div>
           ))}
         </div>

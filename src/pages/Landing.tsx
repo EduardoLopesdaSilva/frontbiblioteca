@@ -1,10 +1,14 @@
 import { Link } from 'react-router-dom'
-import { FaCalendarCheck, FaChartBar, FaLock, FaUserShield } from 'react-icons/fa'
+import { FaCalendarCheck, FaChartBar, FaLock, FaThLarge, FaUserShield } from 'react-icons/fa'
 import Button from '../components/Button'
 import Card from '../components/Card'
 import Alert from '../components/Alert'
+import { useAuth } from '../hooks/useAuth'
 
 export default function Landing() {
+  const { session, authReady } = useAuth()
+  const isLoggedIn = authReady && !!session
+
   return (
     <div className="container-page py-10">
       <div className="grid gap-6 lg:grid-cols-2">
@@ -20,14 +24,36 @@ export default function Landing() {
             aprovação para períodos longos/fixos — com UI profissional e permissões por perfil.
           </p>
 
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Link to="/login">
-              <Button variant="primary">Entrar</Button>
-            </Link>
-            <Link to="/cadastro">
-              <Button variant="secondary">Criar cadastro</Button>
-            </Link>
-          </div>
+          {isLoggedIn ? (
+            <div className="mt-6 space-y-3">
+              <Alert title={`Olá, ${session!.user.name}`}>
+                Você está autenticado como{' '}
+                <strong>{session!.user.role === 'admin' ? 'Bibliotecária/Admin' : 'Usuário'}</strong>. Acesse o painel
+                para reservar horários ou gerenciar a biblioteca.
+              </Alert>
+              <div className="flex flex-wrap gap-3">
+                <Link to="/dashboard">
+                  <Button variant="primary">
+                    <FaThLarge aria-hidden="true" /> Ir para o painel
+                  </Button>
+                </Link>
+                {session!.user.role === 'admin' ? (
+                  <Link to="/admin">
+                    <Button variant="secondary">Área administrativa</Button>
+                  </Link>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Link to="/login">
+                <Button variant="primary">Entrar</Button>
+              </Link>
+              <Link to="/cadastro">
+                <Button variant="secondary">Criar cadastro</Button>
+              </Link>
+            </div>
+          )}
 
           <div className="mt-6">
             <Alert title="Integração com API">
@@ -73,7 +99,7 @@ export default function Landing() {
           <li>Duração mínima de 1 hora.</li>
           <li>Período longo/fixo (duração acima de 3h ou recorrência semanal) gera status <strong>Pendente</strong>.</li>
           <li>Check-in habilita somente 5 minutos antes do início; check-out manual apenas durante “Em uso”.</li>
-          <li>Ao terminar o horário, o status muda para <strong>Finalizada</strong> automaticamente (visual).</li>
+          <li>Ao terminar o horário, reservas “Em uso” aparecem como <strong>Finalizada</strong> no calendário (visual).</li>
         </ul>
       </div>
     </div>

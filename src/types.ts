@@ -61,6 +61,8 @@ export type Reservation = {
   checkInAt?: string
   checkOutAt?: string
   notes?: string
+  /** true quando a reserva pertence ao usuário logado (calendário compartilhado). */
+  isMine?: boolean
 }
 
 export type ResourceItem = {

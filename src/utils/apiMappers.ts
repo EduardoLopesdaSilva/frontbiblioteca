@@ -1,4 +1,4 @@
-import type { ApiReservation, ApiReservationStatus, ApiResource, ApiUserMe, ApiUserType } from '../types/api'
+import type { ApiCalendarSlot, ApiReservation, ApiReservationStatus, ApiResource, ApiUserMe, ApiUserType } from '../types/api'
 import type {
   Institution,
   Reservation,
@@ -8,8 +8,32 @@ import type {
   UserProfile,
   UserTypeLabel,
 } from '../types'
-import { addMinutes, buildDateTime, pad2, toISODate } from './dateFormat'
+import { addMinutes, buildDateTime, pad2 } from './dateFormat'
 import { isLongPeriod } from './reservationRules'
+
+/** Interpreta LocalDateTime da API sem conversão de fuso (evita data/hora erradas no calendário). */
+/** Compara IDs de usuário/reserva ignorando maiúsculas e espaços. */
+export function sameUserId(a?: string | null, b?: string | null): boolean {
+  if (!a || !b) return false
+  return a.trim().toLowerCase() === b.trim().toLowerCase()
+}
+
+export function parseApiLocalDateTime(iso: string) {
+  const normalized = iso.length >= 19 ? iso.slice(0, 19) : iso
+  const [datePart, timePart = '00:00:00'] = normalized.split('T')
+  const [hh, mm] = timePart.split(':')
+  return { date: datePart, time: `${pad2(Number(hh))}:${pad2(Number(mm))}` }
+}
+
+/** Exibe Finalizada quando o período terminou (somente visual; persistência via check-out). */
+export function applyVisualReservationStatus(r: Reservation, now = new Date()): Reservation {
+  if (r.status !== 'Em uso') return r
+  const end = addMinutes(buildDateTime(r.date, r.startTime), r.durationHours * 60)
+  if (now.getTime() > end.getTime()) {
+    return { ...r, status: 'Finalizada' }
+  }
+  return r
+}
 
 const STATUS_FROM_API: Record<ApiReservationStatus, ReservationStatus> = {
   PENDENTE: 'Pendente',
@@ -82,9 +106,11 @@ export function toApiPeriod(date: string, startTime: string, durationHours: numb
 }
 
 export function mapApiReservation(r: ApiReservation): Reservation {
-  const start = new Date(r.startAt)
-  const end = new Date(r.endAt)
-  const durationHours = Math.max(1, Math.round((end.getTime() - start.getTime()) / 3_600_000))
+  const start = parseApiLocalDateTime(r.startAt)
+  const end = parseApiLocalDateTime(r.endAt)
+  const startDt = buildDateTime(start.date, start.time)
+  const endDt = buildDateTime(end.date, end.time)
+  const durationHours = Math.max(1, Math.round((endDt.getTime() - startDt.getTime()) / 3_600_000))
   const status = mapApiStatus(r.status)
 
   return {
@@ -95,8 +121,8 @@ export function mapApiReservation(r: ApiReservation): Reservation {
     resourceType: mapResourceTypeFromApi(r.resourceType),
     resourceLabel: r.resourceName,
     resourceId: r.resourceId,
-    date: toISODate(start),
-    startTime: `${pad2(start.getHours())}:${pad2(start.getMinutes())}`,
+    date: start.date,
+    startTime: start.time,
     durationHours,
     peopleCount: r.peopleCount,
     status,
@@ -105,6 +131,34 @@ export function mapApiReservation(r: ApiReservation): Reservation {
     termAccepted: r.termAccepted,
     checkInAt: r.checkInAt ?? undefined,
     checkOutAt: r.checkOutAt ?? undefined,
+  }
+}
+
+/** Mapeia slot do calendário compartilhado (sem expor dados pessoais de terceiros). */
+export function mapApiCalendarSlot(r: ApiCalendarSlot): Reservation {
+  const start = parseApiLocalDateTime(r.startAt)
+  const end = parseApiLocalDateTime(r.endAt)
+  const startDt = buildDateTime(start.date, start.time)
+  const endDt = buildDateTime(end.date, end.time)
+  const durationHours = Math.max(1, Math.round((endDt.getTime() - startDt.getTime()) / 3_600_000))
+  const status = mapApiStatus(r.status)
+
+  return {
+    id: r.id,
+    createdAt: r.startAt,
+    createdBy: r.mine ? 'self' : 'other',
+    createdByName: r.mine ? 'Minha reserva' : 'Ocupado',
+    resourceType: mapResourceTypeFromApi(r.resourceType),
+    resourceLabel: r.resourceName,
+    resourceId: r.resourceId,
+    date: start.date,
+    startTime: start.time,
+    durationHours,
+    peopleCount: 1,
+    status,
+    requiresApproval: status === 'Pendente',
+    termAccepted: true,
+    isMine: r.mine,
   }
 }
 

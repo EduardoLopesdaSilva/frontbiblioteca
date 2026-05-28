@@ -154,7 +154,7 @@ export default function Cadastro() {
                         setGlobalError(result.message)
                         return
                       }
-                      navigate('/login')
+                      navigate('/dashboard', { replace: true })
                     })()
                   }}
                 >

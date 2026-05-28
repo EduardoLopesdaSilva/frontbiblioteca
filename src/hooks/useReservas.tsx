@@ -5,8 +5,16 @@ import { apiListResources } from '../services/resourceApi'
 import type { ApiResource } from '../types/api'
 import type { Reservation, ReservationResourceType, ReservationStatus, UserProfile } from '../types'
 import { addMinutes, buildDateTime } from '../utils/dateFormat'
-import { mapApiReservation, mapApiResource, mapStatusToApi, toApiPeriod } from '../utils/apiMappers'
-import { capacityFor } from '../utils/reservationRules'
+import {
+  applyVisualReservationStatus,
+  mapApiCalendarSlot,
+  mapApiReservation,
+  mapApiResource,
+  mapStatusToApi,
+  sameUserId,
+  toApiPeriod,
+} from '../utils/apiMappers'
+import { capacityFor, hasScheduleConflict } from '../utils/reservationRules'
 import { useAuth } from './useAuth'
 import { COMPUTADORES, SALAS } from './useAgenda'
 
@@ -27,7 +35,12 @@ type CreateReservationInput = {
 
 type ReservasContextValue = {
   reservas: Reservation[]
+  /** Reservas do usuário logado (para usuário comum = mesma lista da API /me). */
+  myReservas: Reservation[]
+  /** Ocupação global para calendário (usuário comum: sem dados pessoais de terceiros). */
+  calendarReservas: Reservation[]
   loading: boolean
+  listError: string | null
   resourcesReady: boolean
   salas: readonly string[]
   computadores: readonly string[]
@@ -65,7 +78,7 @@ function canManageReservation(
 ): boolean {
   if (!actor) return false
   if (actor.role === 'admin') return true
-  return r.createdBy === actor.id
+  return sameUserId(r.createdBy, actor.id)
 }
 
 function resourceNames(resources: ApiResource[], type: ReservationResourceType) {
@@ -78,32 +91,58 @@ function resourceNames(resources: ApiResource[], type: ReservationResourceType) 
 const ReservasContext = createContext<ReservasContextValue | null>(null)
 
 export function ReservasProvider({ children }: { children: React.ReactNode }) {
-  const { session } = useAuth()
+  const { session, authReady } = useAuth()
   const [reservas, setReservas] = useState<Reservation[]>([])
+  const [calendarOccupancy, setCalendarOccupancy] = useState<Reservation[]>([])
   const [resources, setResources] = useState<ApiResource[]>([])
   const [resourceItems, setResourceItems] = useState<import('../types').ResourceItem[]>([])
   const [loading, setLoading] = useState(false)
+  const [listError, setListError] = useState<string | null>(null)
   const [resourcesReady, setResourcesReady] = useState(false)
 
   const refreshReservas = useCallback(async () => {
+    if (!authReady) return
+
     if (!session) {
       setReservas([])
+      setCalendarOccupancy([])
+      setListError(null)
       return
     }
+
     setLoading(true)
     try {
-      const list =
-        session.user.role === 'admin'
-          ? await reservationApi.apiListAllReservations()
-          : await reservationApi.apiListMyReservations()
-      setReservas(list.map(mapApiReservation))
+      if (session.user.role === 'admin') {
+        const list = await reservationApi.apiListAllReservations()
+        if (!Array.isArray(list)) {
+          throw new ApiError('Resposta inválida da API ao listar reservas.', 500)
+        }
+        const mapped = list.map((item) => applyVisualReservationStatus(mapApiReservation(item)))
+        setReservas(mapped)
+        setCalendarOccupancy(mapped)
+      } else {
+        const [mine, calendar] = await Promise.all([
+          reservationApi.apiListMyReservations(),
+          reservationApi.apiListCalendarOccupancy(),
+        ])
+        if (!Array.isArray(mine) || !Array.isArray(calendar)) {
+          throw new ApiError('Resposta inválida da API ao listar reservas.', 500)
+        }
+        setReservas(mine.map((item) => applyVisualReservationStatus(mapApiReservation(item))))
+        setCalendarOccupancy(
+          calendar.map((item) => applyVisualReservationStatus(mapApiCalendarSlot(item))),
+        )
+      }
+      setListError(null)
     } catch (e) {
       console.error(e)
-      setReservas([])
+      const message =
+        e instanceof ApiError ? e.message : 'Não foi possível carregar as reservas. Verifique se a API está online.'
+      setListError(message)
     } finally {
       setLoading(false)
     }
-  }, [session])
+  }, [session, authReady])
 
   useEffect(() => {
     void (async () => {
@@ -121,8 +160,16 @@ export function ReservasProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   useEffect(() => {
+    if (!authReady) return
     void refreshReservas()
-  }, [refreshReservas])
+  }, [authReady, refreshReservas])
+
+  /** Atualização periódica da ocupação do calendário durante a sessão. */
+  useEffect(() => {
+    if (!authReady || !session) return
+    const timer = window.setInterval(() => void refreshReservas(), 60_000)
+    return () => window.clearInterval(timer)
+  }, [authReady, session, refreshReservas])
 
   const resolveResourceId = useCallback(
     (label: string, type: ReservationResourceType) => {
@@ -134,6 +181,17 @@ export function ReservasProvider({ children }: { children: React.ReactNode }) {
 
   const salas = useMemo(() => resourceNames(resources, 'sala'), [resources])
   const computadores = useMemo(() => resourceNames(resources, 'computador'), [resources])
+
+  const myReservas = useMemo(() => {
+    if (!session) return []
+    if (session.user.role === 'admin') return reservas
+    return reservas.filter((r) => sameUserId(r.createdBy, session.user.id))
+  }, [reservas, session])
+
+  const calendarReservas = useMemo(() => {
+    if (!session) return []
+    return session.user.role === 'admin' ? reservas : calendarOccupancy
+  }, [session, reservas, calendarOccupancy])
 
   const value: ReservasContextValue = useMemo(() => {
     const actor = session?.user
@@ -165,9 +223,39 @@ export function ReservasProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
+    const mergeCreatedReservation = (created: Awaited<ReturnType<typeof reservationApi.apiCreateReservation>>) => {
+      if (!created || !session) return
+      const mapped = applyVisualReservationStatus(mapApiReservation(created))
+      setReservas((prev) => {
+        const without = prev.filter((p) => p.id !== mapped.id)
+        return [mapped, ...without]
+      })
+      if (session.user.role !== 'admin') {
+        const slot = applyVisualReservationStatus(
+          mapApiCalendarSlot({
+            id: created.id,
+            resourceId: created.resourceId,
+            resourceName: created.resourceName,
+            resourceType: created.resourceType,
+            startAt: created.startAt,
+            endAt: created.endAt,
+            status: created.status,
+            mine: true,
+          }),
+        )
+        setCalendarOccupancy((prev) => {
+          const without = prev.filter((p) => p.id !== slot.id)
+          return [slot, ...without]
+        })
+      }
+    }
+
     return {
       reservas,
+      myReservas,
+      calendarReservas,
       loading,
+      listError,
       resourcesReady,
       salas,
       computadores,
@@ -177,7 +265,13 @@ export function ReservasProvider({ children }: { children: React.ReactNode }) {
       canCheckIn,
       canCheckOut,
       async createReservation(input) {
+        if (!resourcesReady) {
+          return { ok: false, message: 'Aguarde o carregamento dos recursos antes de confirmar a reserva.' }
+        }
         if (!input.termAccepted) return { ok: false, message: 'É obrigatório aceitar o Termo de Responsabilidade.' }
+        if (!input.resourceLabel?.trim()) {
+          return { ok: false, message: 'Selecione um recurso (sala ou computador).' }
+        }
         if (input.durationHours < 1) return { ok: false, message: 'A duração mínima é de 1 hora.' }
 
         const cap = capacityFor(input.resourceType)
@@ -192,18 +286,35 @@ export function ReservasProvider({ children }: { children: React.ReactNode }) {
 
         const resourceId = resolveResourceId(input.resourceLabel, input.resourceType)
         if (!resourceId) {
-          return { ok: false, message: 'Recurso não encontrado na API. Verifique se o backend está com os recursos cadastrados.' }
+          return {
+            ok: false,
+            message:
+              'Recurso não encontrado na API. Verifique se o backend está online (porta 8080) e com recursos cadastrados.',
+          }
+        }
+
+        const conflictSource = actor?.role === 'admin' ? reservas : calendarOccupancy
+        if (
+          hasScheduleConflict(conflictSource, {
+            date: input.date,
+            resourceLabel: input.resourceLabel,
+            startTime: input.startTime,
+            durationHours: input.durationHours,
+          })
+        ) {
+          return { ok: false, message: 'Horário indisponível. Já existe reserva neste período.' }
         }
 
         const period = toApiPeriod(input.date, input.startTime, input.durationHours)
         return wrap(async () => {
-          await reservationApi.apiCreateReservation({
+          const created = await reservationApi.apiCreateReservation({
             resourceId,
             ...period,
             peopleCount: input.peopleCount,
             termAccepted: input.termAccepted,
             recurringWeekly: !!input.recurringWeekly,
           })
+          mergeCreatedReservation(created)
         })
       },
       async updateReservation(id, patch) {
@@ -241,7 +352,11 @@ export function ReservasProvider({ children }: { children: React.ReactNode }) {
           return { ok: false, message: 'Você não tem permissão para cancelar esta reserva.' }
         }
         return wrap(async () => {
-          await reservationApi.apiUpdateReservationStatus(id, 'CANCELADA')
+          if (actor?.role === 'admin') {
+            await reservationApi.apiUpdateReservationStatus(id, 'CANCELADA')
+          } else {
+            await reservationApi.apiCancelMyReservation(id)
+          }
         })
       },
       async updateStatus(id, status) {
@@ -289,7 +404,21 @@ export function ReservasProvider({ children }: { children: React.ReactNode }) {
         })
       },
     }
-  }, [reservas, session, loading, resourcesReady, salas, computadores, resourceItems, refreshReservas, resolveResourceId])
+  }, [
+    reservas,
+    myReservas,
+    calendarReservas,
+    calendarOccupancy,
+    session,
+    loading,
+    listError,
+    resourcesReady,
+    salas,
+    computadores,
+    resourceItems,
+    refreshReservas,
+    resolveResourceId,
+  ])
 
   return <ReservasContext.Provider value={value}>{children}</ReservasContext.Provider>
 }

@@ -73,7 +73,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const registerUser = useCallback(
     async (data: Omit<Extract<UserProfile, { role: 'user' }>, 'id' | 'role'> & { password: string }) => {
       try {
-        await authApi.apiRegister({
+        const { token } = await authApi.apiRegister({
           name: data.name,
           cpf: cpfDigits(data.cpf),
           email: data.email,
@@ -85,8 +85,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           vinculo: data.vinculo,
           observacoesExtras: data.observacoesExtras,
         })
+        setToken(token)
+        const s = await loadSessionFromToken()
+        setSession(s)
         return { ok: true as const }
       } catch (e) {
+        setToken(null)
+        setSession(null)
         const message = e instanceof ApiError ? e.message : 'Erro ao cadastrar usuário.'
         return { ok: false as const, message }
       }

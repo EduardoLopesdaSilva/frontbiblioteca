@@ -12,7 +12,7 @@ import Select from '../components/Select'
 import ToggleTabs from '../components/ToggleTabs'
 import { useAuth } from '../hooks/useAuth'
 import { useReservas } from '../hooks/useReservas'
-import type { ReservationResourceType } from '../types'
+import { sameUserId } from '../utils/apiMappers'
 import { toISODate } from '../utils/dateFormat'
 
 type ResourceTab = 'sala' | 'computador'
@@ -21,8 +21,13 @@ export default function Dashboard() {
   const { session } = useAuth()
   const {
     reservas,
+    myReservas,
+    calendarReservas,
     salas,
     computadores,
+    resourcesReady,
+    listError,
+    loading: reservasLoading,
     createReservation,
     cancelReservation,
     canCheckIn,
@@ -73,9 +78,9 @@ export default function Dashboard() {
   }, [resources, resourceLabel])
 
   const filtered = useMemo(() => {
-    const base = isAdmin ? reservas : reservas.filter((r) => r.createdBy === user.id)
-    return base.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  }, [isAdmin, reservas, user.id])
+    const base = isAdmin ? reservas : myReservas
+    return [...base].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  }, [isAdmin, reservas, myReservas])
 
   function openModal(patch?: Partial<ReservationFormState>) {
     setError(null)
@@ -113,6 +118,13 @@ export default function Dashboard() {
       return
     }
     setModalOpen(false)
+    setTab(form.resourceType)
+    setResourceLabel(form.resourceLabel)
+    setDate(form.date)
+    setStartTime(form.startTime)
+    setDurationHours(form.durationHours)
+    setPeopleCount(form.peopleCount)
+    setRecurringWeekly(form.recurringWeekly)
     setSuccess(
       form.recurringWeekly || form.durationHours > 3
         ? 'Reserva criada como Pendente (aguardando aprovação da bibliotecária).'
@@ -125,7 +137,11 @@ export default function Dashboard() {
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-4">
           {error ? <Alert variant="danger">{error}</Alert> : null}
+          {listError ? <Alert variant="danger">{listError}</Alert> : null}
           {success ? <Alert title="OK">{success}</Alert> : null}
+          {!resourcesReady ? (
+            <Alert title="Carregando">Aguarde o carregamento dos recursos da biblioteca…</Alert>
+          ) : null}
 
           <Card title="Reservar (Agenda)">
             <div className="space-y-4">
@@ -175,6 +191,7 @@ export default function Dashboard() {
                   </label>
                   <Button
                     className="ml-auto"
+                    disabled={!resourcesReady || !resourceLabel}
                     onClick={() =>
                       openModal({
                         date,
@@ -193,7 +210,7 @@ export default function Dashboard() {
               </div>
 
               <CalendarView
-                reservas={reservas}
+                reservas={calendarReservas}
                 resourceLabel={resourceLabel}
                 resourceType={tab}
                 selectedDate={date}
@@ -235,16 +252,27 @@ export default function Dashboard() {
 
           <Card title={isAdmin ? 'Reservas (todas)' : 'Minhas reservas'} actions={<FaClipboardList aria-hidden="true" />}>
             <div className="space-y-3">
-              {filtered.length === 0 ? (
+              {reservasLoading ? (
+                <div className="space-y-3" role="status" aria-label="Carregando reservas">
+                  {[1, 2, 3].map((i) => (
+                    <div
+                      key={i}
+                      className="h-24 animate-pulse rounded-xl border border-slate-200 bg-slate-100"
+                    />
+                  ))}
+                </div>
+              ) : filtered.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-700">
-                  Nenhuma reserva ainda.
+                  {listError
+                    ? 'Não foi possível carregar suas reservas. Verifique a conexão com a API.'
+                    : 'Nenhuma reserva encontrada. Crie uma reserva na agenda ao lado.'}
                 </div>
               ) : (
                 filtered.slice(0, 10).map((r) => (
                   <ReservationCard
                     key={r.id}
                     r={r}
-                    canManage={isAdmin || r.createdBy === user.id}
+                    canManage={isAdmin || sameUserId(r.createdBy, user.id)}
                     canCheckIn={canCheckIn(r)}
                     canCheckOut={canCheckOut(r)}
                     onCancel={async (id) => {
@@ -293,7 +321,7 @@ export default function Dashboard() {
         onClose={() => setModalOpen(false)}
         form={form}
         onFormChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
-        resourceOptions={resources}
+        resourceOptions={[...resources]}
         maxPeople={cap}
         loading={saving}
         onConfirm={confirmCreate}

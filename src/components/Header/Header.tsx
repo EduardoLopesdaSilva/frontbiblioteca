@@ -26,7 +26,7 @@ export default function Header() {
   const navigate = useNavigate()
 
   return (
-    <header className="fixed inset-x-0 top-0 z-40 border-b border-white/10 bg-senai-blue">
+    <header className="fixed inset-x-0 top-0 z-40 border-b border-white/10 bg-senai-blue/80 backdrop-blur-sm">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
         <nav className="flex flex-1 items-center gap-1">
           <NavItem to="/" icon={<FaHome />} label="Landing" />

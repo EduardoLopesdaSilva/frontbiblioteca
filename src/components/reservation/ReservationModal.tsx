@@ -1,7 +1,7 @@
 /**
  * Modal reutilizável: formulário + termo obrigatório antes de confirmar reserva.
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { FaCheck } from 'react-icons/fa'
 import type { ReservationResourceType } from '../../types'
 import Button from '../Button'
@@ -39,6 +39,10 @@ export default function ReservationModal({
   loading?: boolean
 }) {
   const [termAccepted, setTermAccepted] = useState(false)
+
+  useEffect(() => {
+    if (open) setTermAccepted(false)
+  }, [open])
 
   return (
     <Modal

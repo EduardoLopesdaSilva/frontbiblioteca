@@ -54,3 +54,15 @@ export type ApiReservation = {
   checkInAt: string | null
   checkOutAt: string | null
 }
+
+/** Ocupação do calendário — sem dados pessoais. */
+export type ApiCalendarSlot = {
+  id: string
+  resourceId: string
+  resourceName: string
+  resourceType: ApiResourceType
+  startAt: string
+  endAt: string
+  status: ApiReservationStatus
+  mine: boolean
+}
